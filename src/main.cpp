@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Firebase_ESP_Client.h>
+#include <DHT.h>
 
 // Firebase helpers
 #include <addons/TokenHelper.h>
@@ -31,13 +32,42 @@ FirebaseAuth auth;
 FirebaseConfig config;
 
 // Global variables
-unsigned long sendDataPrevMillis = 0;
+unsigned long t1_sendDataPrevMillis = 0;
+unsigned long t2_sendDataPrevMillis = 0;
 bool signupOK = false;
+
+// GPIO
+#define LED_OUTPUT 32
+#define LED_RED 33
+#define LED_GREEN 25
+#define LED_BLUE 26
+#define LED_CONFORT 23
+
+// DHT
+#define DHTPIN 22
+#define DHTTYPE DHT22
+
+DHT dht(DHTPIN, DHTTYPE);
 
 void setup()
 {
   // Initialize Serial
   Serial.begin(115200);
+
+  // Initialize GPIO
+  pinMode(LED_OUTPUT, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_BLUE, OUTPUT);
+  pinMode(LED_CONFORT, OUTPUT);
+  digitalWrite(LED_OUTPUT, HIGH);
+  analogWrite(LED_RED, 0);
+  analogWrite(LED_GREEN, 0);
+  analogWrite(LED_BLUE, 0);
+  digitalWrite(LED_CONFORT, LOW);
+
+  // Initialize DHT
+  dht.begin();
 
   // Initialize WiFi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -80,26 +110,21 @@ void setup()
 
 void loop ()
 {
-  static int intValue = 0;
-  float floatValue = 0.0;
-  static bool boolValue = true;
-
-  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 30000 || sendDataPrevMillis == 0))
+  if (Firebase.ready() && signupOK)
   {
-    // Firebase is ready, we are signup and 10 seconds has passed
-    // Save current time
-    sendDataPrevMillis = millis();
+    // Task 1: read every 3 seconds
+    if (millis() - t1_sendDataPrevMillis > 3000 || t1_sendDataPrevMillis == 0)
+  {
+      // Update execution time
+      t1_sendDataPrevMillis = millis();
 
-    // Write sample int
-    Serial.print("INT WRITE ");
-    intValue++;
-    if (Firebase.RTDB.setInt(&fbdo, "test/int", intValue))
+      // Read output LED
+      bool ledOutput = false;
+      Serial.print("actuador/led: ");
+      if (Firebase.RTDB.getBool(&fbdo, "actuador/led", &ledOutput))
     {
-      Serial.println("OK");
-      Serial.println("  PATH: " + fbdo.dataPath());
-      Serial.println("  TYPE: " + fbdo.dataType());
-      Serial.print("  VALUE: ");
-      Serial.println(fbdo.intData());
+        Serial.println(ledOutput);
+        digitalWrite(LED_OUTPUT, !ledOutput);
     }
     else
     {
@@ -107,16 +132,13 @@ void loop ()
       Serial.println("  REASON: " + fbdo.errorReason());
     }
 
-    // Write sample float
-    floatValue = 0.01 + random (0,100);
-    Serial.print("FLOAT WRITE ");
-    if (Firebase.RTDB.setFloat(&fbdo, "test/float", floatValue))
+      // Read red LED
+      int ledRed = 0;
+      Serial.print("actuador/rgb/red: ");
+      if (Firebase.RTDB.getInt(&fbdo, "actuador/rgb/red", &ledRed))
     {
-      Serial.println("OK");
-      Serial.println("  PATH: " + fbdo.dataPath());
-      Serial.println("  TYPE: " + fbdo.dataType());
-      Serial.print("  VALUE: ");
-      Serial.println(fbdo.floatData());
+        Serial.println(ledRed);
+        analogWrite(LED_RED, ledRed);
     }
     else
     {
@@ -124,16 +146,13 @@ void loop ()
       Serial.println("  REASON: " + fbdo.errorReason());
     }
 
-    // Write sample boolean
-    boolValue = !boolValue;
-    Serial.print("BOOLEAN WRITE ");
-    if (Firebase.RTDB.setBool(&fbdo, "test/boolean", boolValue))
+      // Read green LED
+      int ledGreen = 0;
+      Serial.print("actuador/rgb/green: ");
+      if (Firebase.RTDB.getInt(&fbdo, "actuador/rgb/green", &ledGreen))
     {
-      Serial.println("OK");
-      Serial.println("  PATH: " + fbdo.dataPath());
-      Serial.println("  TYPE: " + fbdo.dataType());
-      Serial.print("  VALUE: ");
-      Serial.println(fbdo.boolData());
+        Serial.println(ledGreen);
+        analogWrite(LED_GREEN, ledGreen);
     }
     else
     {
@@ -141,80 +160,111 @@ void loop ()
       Serial.println("  REASON: " + fbdo.errorReason());
     }
 
-    // Write sample string
-    Serial.print("STRING WRITE ");
-    if (Firebase.RTDB.setString(&fbdo, "test/string", "KAIXO!"))
+      // Read blue LED
+      int ledBlue = 0;
+      Serial.print("actuador/rgb/blue: ");
+      if (Firebase.RTDB.getInt(&fbdo, "actuador/rgb/blue", &ledBlue))
     {
-      Serial.println("OK");
-      Serial.println("  PATH: " + fbdo.dataPath());
-      Serial.println("  TYPE: " + fbdo.dataType());
-      Serial.print("  VALUE: ");
-      Serial.println(fbdo.stringData());
+        Serial.println(ledBlue);
+        analogWrite(LED_BLUE, ledBlue);
     }
     else
     {
       Serial.println("FAILED");
       Serial.println("  REASON: " + fbdo.errorReason());
     }
+    }
 
-    // Read sample int
-    int intRead = 0;
-    Serial.print("read/int: ");
-    if (Firebase.RTDB.getInt(&fbdo, "read/int", &intRead))
+    // Task 2: write every minute
+    if (millis() - t2_sendDataPrevMillis > 60000 || t2_sendDataPrevMillis == 0)
     {
-      Serial.println(intRead);
+      // Update execution time
+      t2_sendDataPrevMillis = millis();
+
+      // Obtain current timestamp
+      String timestampUNIX = getLocalTimeUNIX();
+      String timestampISO = getLocalTimeISO();
+
+      float humidity = dht.readHumidity();
+      float temperature = dht.readTemperature();
+
+      // Calculate confort
+      String confort = "";
+      if (temperature >= 21.0f && temperature <= 25.0f && humidity >= 40.0f && humidity <= 60.0f)
+      {
+        confort = "bueno";
+        digitalWrite(LED_CONFORT, HIGH);
+      }
+      else
+      {
+        confort = "malo";
+        digitalWrite(LED_CONFORT, LOW);
+      }
+      
+      // Write confort
+      Serial.print("Confort write ");
+      if (Firebase.RTDB.setString(&fbdo, "sensor/" + timestampUNIX + "/confort", confort))
+      {
+        Serial.println("OK");
+        Serial.println("  Path: " + fbdo.dataPath());
+        Serial.println("  Type: " + fbdo.dataType());
+        Serial.print("  Value: ");
+        Serial.println(fbdo.stringData());
     }
     else
     {
       Serial.println("FAILED");
-      Serial.println("  REASON: " + fbdo.errorReason());
+        Serial.println("  Reason: " + fbdo.errorReason());
     }
 
-    // Read sample float
-    float floatRead = 0.0;
-    Serial.print("read/float: ");
-    if (Firebase.RTDB.getFloat(&fbdo, "read/float", &floatRead))
+      // Write timestamp
+      Serial.print("Timestamp write ");
+      if (Firebase.RTDB.setString(&fbdo, "sensor/" + timestampUNIX + "/timestamp", timestampISO))
     {
-      Serial.println(floatRead);
+        Serial.println("OK");
+        Serial.println("  Path: " + fbdo.dataPath());
+        Serial.println("  Type: " + fbdo.dataType());
+        Serial.print("  Value: ");
+        Serial.println(fbdo.stringData());
     }
     else
     {
       Serial.println("FAILED");
-      Serial.println("  REASON: " + fbdo.errorReason());
+        Serial.println("  Reason: " + fbdo.errorReason());
     }
 
-    // Read sample boolean
-    bool boolRead = false;
-    Serial.print("read/boolean: ");
-    if (Firebase.RTDB.getBool(&fbdo, "read/boolean", &boolRead))
+      // Write humidity
+      Serial.print("Humidity write ");
+      if (Firebase.RTDB.setFloat(&fbdo, "sensor/" + timestampUNIX + "/humedad", humidity))
     {
-      Serial.println(boolRead);
+        Serial.println("OK");
+        Serial.println("  Path: " + fbdo.dataPath());
+        Serial.println("  Type: " + fbdo.dataType());
+        Serial.print("  Value: ");
+        Serial.println(fbdo.floatData());
     }
     else
     {
       Serial.println("FAILED");
-      Serial.println("  REASON: " + fbdo.errorReason());
+        Serial.println("  Reason: " + fbdo.errorReason());
     }
 
-    // Read sample string
-    String stringRead = "";
-    Serial.print("read/string: ");
-    if (Firebase.RTDB.getString(&fbdo, "read/string", &stringRead))
+      // Write temperature
+      Serial.print("Temperature write ");
+      if (Firebase.RTDB.setFloat(&fbdo, "sensor/" + timestampUNIX + "/temperatura", temperature))
     {
-      Serial.println(stringRead);
+        Serial.println("OK");
+        Serial.println("  Path: " + fbdo.dataPath());
+        Serial.println("  Type: " + fbdo.dataType());
+        Serial.print("  Value: ");
+        Serial.println(fbdo.floatData());
     }
     else
     {
       Serial.println("FAILED");
-      Serial.println("  REASON: " + fbdo.errorReason());
+        Serial.println("  Reason: " + fbdo.errorReason());
     }
-
-    // Print time
-    String timestamp_unix = getLocalTimeUNIX();
-    Serial.println("UNIX: " + timestamp_unix);
-
-    String timestamp_iso = getLocalTimeISO();
-    Serial.println("ISO: " + timestamp_iso);
+    }
   }
 }
 
